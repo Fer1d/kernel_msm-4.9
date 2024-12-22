@@ -596,6 +596,12 @@ void workaround_check_unknown_cable(struct smb_charger *chg);
 void workaround_check_unknown_cable_clear(struct smb_charger *chg);
 void workaround_fake_pd_hard_reset_trigger(void);
 bool workaround_fake_pd_hard_reset_show(void);
+void workaround_control_vbus2_regulator(struct smb_charger *chg, bool on);
+void workaround_control_vbus2_regulator_trigger(void);
+void workaround_control_vbus2_regulator_init(struct smb_charger *chg);
+void workaround_update_hall_ic(bool hall_ic);
+bool workaround_skip_usb_id_running(struct smb_charger *chg);
+void workaround_skip_usb_id_init(struct smb_charger *chg);
 // Override functions implemented in smb-lib.c
 irqreturn_t override_handle_chg_state_change(int irq, void *arg);
 irqreturn_t override_handle_usb_plugin(int irq, void *arg);
@@ -605,6 +611,7 @@ irqreturn_t override_handle_usb_typec_change(int irq, void *arg);
 irqreturn_t override_handle_dc_debug(int irq, void *arg);
 irqreturn_t override_handle_aicl_fail(int irq, void* arg);
 irqreturn_t override_handle_switcher_power_ok(int irq, void* arg);
+irqreturn_t oerride_handle_otg_fail(int irq, void *arg);
 #endif /* CONFIG_LGE_PM : for LGE workaround */
 
 #endif /* __SMB2_CHARGER_H */
