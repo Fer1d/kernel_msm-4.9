@@ -49,6 +49,19 @@
 #include "../wcd9xxx-resmgr-v2.h"
 #include "../wcdcal-hwdep.h"
 #include "wcd934x-dsd.h"
+#ifdef CONFIG_MACH_SDM845_JUDYLN
+#include <soc/qcom/lge/lge_regulator_mode_change.h>
+#elif defined(CONFIG_MACH_SDM845_CAYMANSLM)
+#include <soc/qcom/lge/lge_regulator_mode_change.h>
+#endif
+#ifdef CONFIG_MACH_LGE // add extcon dev for SAR backoff
+#include <linux/extcon.h>
+
+static const unsigned int extcon_sar_backoff[] = {
+	EXTCON_MECHANICAL,
+	EXTCON_NONE,
+};
+#endif /* CONFIG_MACH_LGE */
 
 #define WCD934X_RATES_MASK (SNDRV_PCM_RATE_8000 | SNDRV_PCM_RATE_16000 |\
 			    SNDRV_PCM_RATE_32000 | SNDRV_PCM_RATE_48000 |\
@@ -636,6 +649,10 @@ struct tavil_priv {
 	struct platform_device *pdev_child_devices
 		[WCD934X_CHILD_DEVICES_MAX];
 	int child_count;
+
+#ifdef CONFIG_MACH_LGE // add extcon dev for SAR backoff
+	struct extcon_dev* sar;
+#endif
 };
 
 static const struct tavil_reg_mask_val tavil_spkr_default[] = {
@@ -897,7 +914,6 @@ static int tavil_codec_enable_anc(struct snd_soc_dapm_widget *w,
 	struct wcd9xxx_anc_header *anc_head;
 	struct firmware_cal *hwdep_cal = NULL;
 	u32 anc_writes_size = 0;
-	u32 anc_cal_size = 0;
 	int anc_size_remaining;
 	u32 *anc_ptr;
 	u16 reg;
@@ -986,8 +1002,16 @@ static int tavil_codec_enable_anc(struct snd_soc_dapm_widget *w,
 			goto err;
 		}
 
-		anc_cal_size = anc_writes_size;
-		for (i = 0; i < anc_writes_size; i++) {
+		i = 0;
+
+		if (!strcmp(w->name, "RX INT1 DAC") ||
+		    !strcmp(w->name, "RX INT3 DAC"))
+			anc_writes_size = anc_writes_size / 2;
+		else if (!strcmp(w->name, "RX INT2 DAC") ||
+			 !strcmp(w->name, "RX INT4 DAC"))
+			i = anc_writes_size / 2;
+
+		for (; i < anc_writes_size; i++) {
 			WCD934X_CODEC_UNPACK_ENTRY(anc_ptr[i], reg, mask, val);
 			snd_soc_write(codec, reg, (val & mask));
 		}
@@ -1460,6 +1484,33 @@ err:
 	return -EINVAL;
 }
 
+
+#ifdef CONFIG_SND_LGE_WDSP_SSR
+static int wdsp_ssr_get(struct snd_kcontrol *kcontrol,
+        struct snd_ctl_elem_value *ucontrol)
+{
+	pr_debug("%s(): \n", __func__);
+	return 0;
+}
+
+static int wdsp_ssr_put(struct snd_kcontrol *kcontrol,
+        struct snd_ctl_elem_value *ucontrol)
+{
+	struct snd_soc_codec *codec = snd_soc_kcontrol_codec(kcontrol);
+
+	int ret = 0;
+	ret = ucontrol->value.enumerated.item[0];
+	pr_err("%s():ret = %d\n", __func__ ,ret );
+
+	if(ret)
+	{
+		pr_err("%s(): WDSP SSR Irq\n", __func__);
+		snd_soc_write(codec,WCD934X_CPE_SS_BACKUP_INT,0x02);
+	}
+	return 0;
+}
+#endif
+
 static void tavil_codec_enable_slim_port_intr(
 					struct wcd9xxx_codec_dai_data *dai,
 					struct snd_soc_codec *codec)
@@ -1677,7 +1728,7 @@ static int tavil_codec_set_i2s_tx_ch(struct snd_soc_dapm_widget *w,
 
 		snd_soc_update_bits(codec,
 				    WCD934X_DATA_HUB_I2S_TX0_CFG,
-				    0x0C, 0x01);
+				    0x0C, 0x04);
 
 		snd_soc_update_bits(codec,
 				    WCD934X_DATA_HUB_I2S_TX1_0_CFG,
@@ -2112,6 +2163,10 @@ static int tavil_codec_enable_ear_pa(struct snd_soc_dapm_widget *w,
 	int ret = 0;
 	struct snd_soc_codec *codec = snd_soc_dapm_to_codec(w->dapm);
 
+#ifdef CONFIG_MACH_LGE
+	struct tavil_priv *tavil = snd_soc_codec_get_drvdata(codec);
+#endif
+
 	dev_dbg(codec->dev, "%s %s %d\n", __func__, w->name, event);
 
 	switch (event) {
@@ -2120,6 +2175,19 @@ static int tavil_codec_enable_ear_pa(struct snd_soc_dapm_widget *w,
 		 * 5ms sleep is required after PA is enabled as per
 		 * HW requirement
 		 */
+#ifdef CONFIG_MACH_LGE  // SAR backoff
+        if( tavil->sar != NULL ) {
+            pr_info("%s : enable SAR backoff\n", __func__);
+            extcon_set_state_sync(tavil->sar, EXTCON_MECHANICAL, true);
+        }
+#endif /* CONFIG_MACH_LGE */
+
+#ifdef CONFIG_MACH_SDM845_JUDYLN
+ 	bob_mode_enable();
+#elif defined(CONFIG_MACH_SDM845_CAYMANSLM)
+	bob_mode_enable();
+#endif
+
 		usleep_range(5000, 5500);
 		snd_soc_update_bits(codec, WCD934X_CDC_RX0_RX_PATH_CTL,
 				    0x10, 0x00);
@@ -2135,6 +2203,18 @@ static int tavil_codec_enable_ear_pa(struct snd_soc_dapm_widget *w,
 		 * 5ms sleep is required after PA is disabled as per
 		 * HW requirement
 		 */
+#ifdef CONFIG_MACH_LGE  // SAR backoff
+        if( tavil->sar != NULL ) {
+            pr_info("%s : disable SAR backoff\n", __func__);
+            extcon_set_state_sync(tavil->sar, EXTCON_MECHANICAL, false);
+        }
+#endif /* CONFIG_MACH_LGE */
+
+#ifdef CONFIG_MACH_SDM845_JUDYLN
+	bob_mode_disable();
+#elif defined(CONFIG_MACH_SDM845_CAYMANSLM)
+	bob_mode_disable();
+#endif
 		usleep_range(5000, 5500);
 
 		if (!(strcmp(w->name, "ANC EAR PA"))) {
@@ -2949,6 +3029,11 @@ static int __tavil_codec_enable_swr(struct snd_soc_dapm_widget *w, int event)
 	int ch_cnt = 0;
 
 	tavil = snd_soc_codec_get_drvdata(codec);
+
+	if (!tavil->swr.ctrl_data)
+		return -EINVAL;
+	if (!tavil->swr.ctrl_data[0].swr_pdev)
+		return -EINVAL;
 
 	switch (event) {
 	case SND_SOC_DAPM_PRE_PMU:
@@ -4128,7 +4213,7 @@ static int tavil_codec_find_amic_input(struct snd_soc_codec *codec,
 
 	if (adc_mux_n < 3) {
 		adc_mux_in_reg = WCD934X_CDC_TX_INP_MUX_ADC_MUX0_CFG1 +
-				 adc_mux_n;
+				 2 * adc_mux_n;
 		mask = 0x03;
 		shift = 0;
 		amic_mux_sel_reg = WCD934X_CDC_TX_INP_MUX_ADC_MUX0_CFG0 +
@@ -4141,7 +4226,7 @@ static int tavil_codec_find_amic_input(struct snd_soc_codec *codec,
 				   2 * adc_mux_n;
 	} else if (adc_mux_n < 7) {
 		adc_mux_in_reg = WCD934X_CDC_TX_INP_MUX_ADC_MUX0_CFG1 +
-				 (adc_mux_n - 4);
+				 2 * (adc_mux_n - 4);
 		mask = 0x0C;
 		shift = 2;
 		amic_mux_sel_reg = WCD934X_CDC_TX_INP_MUX_ADC_MUX4_CFG0 +
@@ -4154,24 +4239,25 @@ static int tavil_codec_find_amic_input(struct snd_soc_codec *codec,
 				   adc_mux_n - 4;
 	} else if (adc_mux_n < 12) {
 		adc_mux_in_reg = WCD934X_CDC_TX_INP_MUX_ADC_MUX0_CFG1 +
-				 ((adc_mux_n == 8) ? (adc_mux_n - 8) :
-				  (adc_mux_n - 9));
+				 2 * (((adc_mux_n == 8) ? (adc_mux_n - 8) :
+				  (adc_mux_n - 9)));
 		mask = 0x30;
 		shift = 4;
-		amic_mux_sel_reg = WCD934X_CDC_TX_INP_MUX_ADC_MUX4_CFG0 +
-				   adc_mux_n - 4;
+		amic_mux_sel_reg = WCD934X_CDC_TX_INP_MUX_ADC_MUX8_CFG0 +
+				   ((adc_mux_n == 8) ? (adc_mux_n - 8) :
+					(adc_mux_n - 9));
 	} else if (adc_mux_n < 13) {
 		adc_mux_in_reg = WCD934X_CDC_TX_INP_MUX_ADC_MUX3_CFG1;
 		mask = 0x30;
 		shift = 4;
 		amic_mux_sel_reg = WCD934X_CDC_TX_INP_MUX_ADC_MUX4_CFG0 +
-				   adc_mux_n - 4;
+				   adc_mux_n - 5;
 	} else {
 		adc_mux_in_reg = WCD934X_CDC_TX_INP_MUX_ADC_MUX0_CFG1;
 		mask = 0xC0;
 		shift = 6;
 		amic_mux_sel_reg = WCD934X_CDC_TX_INP_MUX_ADC_MUX4_CFG0 +
-				   adc_mux_n - 4;
+				   adc_mux_n - 5;
 	}
 
 	is_amic = (((snd_soc_read(codec, adc_mux_in_reg) & mask) >> shift)
@@ -4297,10 +4383,17 @@ static void tavil_tx_hpf_corner_freq_callback(struct work_struct *work)
 	}
 	snd_soc_update_bits(codec, dec_cfg_reg, TX_HPF_CUT_OFF_FREQ_MASK,
 			    hpf_cut_off_freq << 5);
+#if defined(CONFIG_MACH_SDM845_CAYMANSLM)
+	snd_soc_update_bits(codec, go_bit_reg, 0x03, 0x02);
+	/* Minimum 1 clk cycle delay is required as per HW spec */
+	usleep_range(1000, 1010);
+	snd_soc_update_bits(codec, go_bit_reg, 0x03, 0x01);
+#else
 	snd_soc_update_bits(codec, go_bit_reg, 0x02, 0x02);
 	/* Minimum 1 clk cycle delay is required as per HW spec */
 	usleep_range(1000, 1010);
 	snd_soc_update_bits(codec, go_bit_reg, 0x02, 0x00);
+#endif
 }
 
 static void tavil_tx_mute_update_callback(struct work_struct *work)
@@ -4450,6 +4543,15 @@ static int tavil_codec_enable_dec(struct snd_soc_dapm_widget *w,
 			snd_soc_update_bits(codec, dec_cfg_reg,
 					    TX_HPF_CUT_OFF_FREQ_MASK,
 					    CF_MIN_3DB_150HZ << 5);
+#if defined(CONFIG_MACH_SDM845_CAYMANSLM)
+			snd_soc_update_bits(codec, hpf_gate_reg, 0x03, 0x02);
+			/*
+			 * Minimum 1 clk cycle delay is required as per
+			 * HW spec.
+			 */
+			usleep_range(1000, 1010);
+			snd_soc_update_bits(codec, hpf_gate_reg, 0x03, 0x01);
+#else
 			snd_soc_update_bits(codec, hpf_gate_reg, 0x02, 0x02);
 			/*
 			 * Minimum 1 clk cycle delay is required as per
@@ -4457,6 +4559,7 @@ static int tavil_codec_enable_dec(struct snd_soc_dapm_widget *w,
 			 */
 			usleep_range(1000, 1010);
 			snd_soc_update_bits(codec, hpf_gate_reg, 0x02, 0x00);
+#endif
 		}
 		/* schedule work queue to Remove Mute */
 		schedule_delayed_work(&tavil->tx_mute_dwork[decimator].dwork,
@@ -6228,8 +6331,13 @@ static const struct snd_kcontrol_new tavil_snd_controls[] = {
 	SOC_ENUM_EXT("SPKR Right Boost Max State", tavil_spkr_boost_stage_enum,
 		     tavil_spkr_right_boost_stage_get,
 		     tavil_spkr_right_boost_stage_put),
+#ifdef CONFIG_MACH_LGE
 	SOC_SINGLE_TLV("HPHL Volume", WCD934X_HPH_L_EN, 0, 20, 1, line_gain),
 	SOC_SINGLE_TLV("HPHR Volume", WCD934X_HPH_R_EN, 0, 20, 1, line_gain),
+#else /* P OS QC original */
+	SOC_SINGLE_TLV("HPHL Volume", WCD934X_HPH_L_EN, 0, 24, 1, line_gain),
+	SOC_SINGLE_TLV("HPHR Volume", WCD934X_HPH_R_EN, 0, 24, 1, line_gain),
+#endif
 	SOC_SINGLE_TLV("LINEOUT1 Volume", WCD934X_DIFF_LO_LO1_COMPANDER,
 		3, 16, 1, line_gain),
 	SOC_SINGLE_TLV("LINEOUT2 Volume", WCD934X_DIFF_LO_LO2_COMPANDER,
@@ -6239,77 +6347,77 @@ static const struct snd_kcontrol_new tavil_snd_controls[] = {
 	SOC_SINGLE_TLV("ADC3 Volume", WCD934X_ANA_AMIC3, 0, 20, 0, analog_gain),
 	SOC_SINGLE_TLV("ADC4 Volume", WCD934X_ANA_AMIC4, 0, 20, 0, analog_gain),
 
-	SOC_SINGLE_SX_TLV("RX0 Digital Volume", WCD934X_CDC_RX0_RX_VOL_CTL,
-		0, -84, 40, digital_gain), /* -84dB min - 40dB max */
-	SOC_SINGLE_SX_TLV("RX1 Digital Volume", WCD934X_CDC_RX1_RX_VOL_CTL,
-		0, -84, 40, digital_gain),
-	SOC_SINGLE_SX_TLV("RX2 Digital Volume", WCD934X_CDC_RX2_RX_VOL_CTL,
-		0, -84, 40, digital_gain),
-	SOC_SINGLE_SX_TLV("RX3 Digital Volume", WCD934X_CDC_RX3_RX_VOL_CTL,
-		0, -84, 40, digital_gain),
-	SOC_SINGLE_SX_TLV("RX4 Digital Volume", WCD934X_CDC_RX4_RX_VOL_CTL,
-		0, -84, 40, digital_gain),
-	SOC_SINGLE_SX_TLV("RX7 Digital Volume", WCD934X_CDC_RX7_RX_VOL_CTL,
-		0, -84, 40, digital_gain),
-	SOC_SINGLE_SX_TLV("RX8 Digital Volume", WCD934X_CDC_RX8_RX_VOL_CTL,
-		0, -84, 40, digital_gain),
-	SOC_SINGLE_SX_TLV("RX0 Mix Digital Volume",
-		WCD934X_CDC_RX0_RX_VOL_MIX_CTL, 0, -84, 40, digital_gain),
-	SOC_SINGLE_SX_TLV("RX1 Mix Digital Volume",
-		WCD934X_CDC_RX1_RX_VOL_MIX_CTL, 0, -84, 40, digital_gain),
-	SOC_SINGLE_SX_TLV("RX2 Mix Digital Volume",
-		WCD934X_CDC_RX2_RX_VOL_MIX_CTL, 0, -84, 40, digital_gain),
-	SOC_SINGLE_SX_TLV("RX3 Mix Digital Volume",
-		WCD934X_CDC_RX3_RX_VOL_MIX_CTL, 0, -84, 40, digital_gain),
-	SOC_SINGLE_SX_TLV("RX4 Mix Digital Volume",
-		WCD934X_CDC_RX4_RX_VOL_MIX_CTL, 0, -84, 40, digital_gain),
-	SOC_SINGLE_SX_TLV("RX7 Mix Digital Volume",
-		WCD934X_CDC_RX7_RX_VOL_MIX_CTL, 0, -84, 40, digital_gain),
-	SOC_SINGLE_SX_TLV("RX8 Mix Digital Volume",
-		WCD934X_CDC_RX8_RX_VOL_MIX_CTL, 0, -84, 40, digital_gain),
+	SOC_SINGLE_S8_TLV("RX0 Digital Volume", WCD934X_CDC_RX0_RX_VOL_CTL,
+		-84, 40, digital_gain), /* -84dB min - 40dB max */
+	SOC_SINGLE_S8_TLV("RX1 Digital Volume", WCD934X_CDC_RX1_RX_VOL_CTL,
+		-84, 40, digital_gain),
+	SOC_SINGLE_S8_TLV("RX2 Digital Volume", WCD934X_CDC_RX2_RX_VOL_CTL,
+		-84, 40, digital_gain),
+	SOC_SINGLE_S8_TLV("RX3 Digital Volume", WCD934X_CDC_RX3_RX_VOL_CTL,
+		-84, 40, digital_gain),
+	SOC_SINGLE_S8_TLV("RX4 Digital Volume", WCD934X_CDC_RX4_RX_VOL_CTL,
+		-84, 40, digital_gain),
+	SOC_SINGLE_S8_TLV("RX7 Digital Volume", WCD934X_CDC_RX7_RX_VOL_CTL,
+		-84, 40, digital_gain),
+	SOC_SINGLE_S8_TLV("RX8 Digital Volume", WCD934X_CDC_RX8_RX_VOL_CTL,
+		-84, 40, digital_gain),
+	SOC_SINGLE_S8_TLV("RX0 Mix Digital Volume",
+		WCD934X_CDC_RX0_RX_VOL_MIX_CTL, -84, 40, digital_gain),
+	SOC_SINGLE_S8_TLV("RX1 Mix Digital Volume",
+		WCD934X_CDC_RX1_RX_VOL_MIX_CTL, -84, 40, digital_gain),
+	SOC_SINGLE_S8_TLV("RX2 Mix Digital Volume",
+		WCD934X_CDC_RX2_RX_VOL_MIX_CTL, -84, 40, digital_gain),
+	SOC_SINGLE_S8_TLV("RX3 Mix Digital Volume",
+		WCD934X_CDC_RX3_RX_VOL_MIX_CTL, -84, 40, digital_gain),
+	SOC_SINGLE_S8_TLV("RX4 Mix Digital Volume",
+		WCD934X_CDC_RX4_RX_VOL_MIX_CTL, -84, 40, digital_gain),
+	SOC_SINGLE_S8_TLV("RX7 Mix Digital Volume",
+		WCD934X_CDC_RX7_RX_VOL_MIX_CTL, -84, 40, digital_gain),
+	SOC_SINGLE_S8_TLV("RX8 Mix Digital Volume",
+		WCD934X_CDC_RX8_RX_VOL_MIX_CTL, -84, 40, digital_gain),
 
-	SOC_SINGLE_SX_TLV("DEC0 Volume", WCD934X_CDC_TX0_TX_VOL_CTL, 0,
+	SOC_SINGLE_S8_TLV("DEC0 Volume", WCD934X_CDC_TX0_TX_VOL_CTL,
 		-84, 40, digital_gain),
-	SOC_SINGLE_SX_TLV("DEC1 Volume", WCD934X_CDC_TX1_TX_VOL_CTL, 0,
+	SOC_SINGLE_S8_TLV("DEC1 Volume", WCD934X_CDC_TX1_TX_VOL_CTL,
 		-84, 40, digital_gain),
-	SOC_SINGLE_SX_TLV("DEC2 Volume", WCD934X_CDC_TX2_TX_VOL_CTL, 0,
+	SOC_SINGLE_S8_TLV("DEC2 Volume", WCD934X_CDC_TX2_TX_VOL_CTL,
 		-84, 40, digital_gain),
-	SOC_SINGLE_SX_TLV("DEC3 Volume", WCD934X_CDC_TX3_TX_VOL_CTL, 0,
+	SOC_SINGLE_S8_TLV("DEC3 Volume", WCD934X_CDC_TX3_TX_VOL_CTL,
 		-84, 40, digital_gain),
-	SOC_SINGLE_SX_TLV("DEC4 Volume", WCD934X_CDC_TX4_TX_VOL_CTL, 0,
+	SOC_SINGLE_S8_TLV("DEC4 Volume", WCD934X_CDC_TX4_TX_VOL_CTL,
 		-84, 40, digital_gain),
-	SOC_SINGLE_SX_TLV("DEC5 Volume", WCD934X_CDC_TX5_TX_VOL_CTL, 0,
+	SOC_SINGLE_S8_TLV("DEC5 Volume", WCD934X_CDC_TX5_TX_VOL_CTL,
 		-84, 40, digital_gain),
-	SOC_SINGLE_SX_TLV("DEC6 Volume", WCD934X_CDC_TX6_TX_VOL_CTL, 0,
+	SOC_SINGLE_S8_TLV("DEC6 Volume", WCD934X_CDC_TX6_TX_VOL_CTL,
 		-84, 40, digital_gain),
-	SOC_SINGLE_SX_TLV("DEC7 Volume", WCD934X_CDC_TX7_TX_VOL_CTL, 0,
+	SOC_SINGLE_S8_TLV("DEC7 Volume", WCD934X_CDC_TX7_TX_VOL_CTL,
 		-84, 40, digital_gain),
-	SOC_SINGLE_SX_TLV("DEC8 Volume", WCD934X_CDC_TX8_TX_VOL_CTL, 0,
+	SOC_SINGLE_S8_TLV("DEC8 Volume", WCD934X_CDC_TX8_TX_VOL_CTL,
 		-84, 40, digital_gain),
 
-	SOC_SINGLE_SX_TLV("IIR0 INP0 Volume",
-		WCD934X_CDC_SIDETONE_IIR0_IIR_GAIN_B1_CTL, 0, -84, 40,
+	SOC_SINGLE_S8_TLV("IIR0 INP0 Volume",
+		WCD934X_CDC_SIDETONE_IIR0_IIR_GAIN_B1_CTL, -84, 40,
 		digital_gain),
-	SOC_SINGLE_SX_TLV("IIR0 INP1 Volume",
-		WCD934X_CDC_SIDETONE_IIR0_IIR_GAIN_B2_CTL, 0, -84, 40,
+	SOC_SINGLE_S8_TLV("IIR0 INP1 Volume",
+		WCD934X_CDC_SIDETONE_IIR0_IIR_GAIN_B2_CTL, -84, 40,
 		digital_gain),
-	SOC_SINGLE_SX_TLV("IIR0 INP2 Volume",
-		WCD934X_CDC_SIDETONE_IIR0_IIR_GAIN_B3_CTL, 0, -84, 40,
+	SOC_SINGLE_S8_TLV("IIR0 INP2 Volume",
+		WCD934X_CDC_SIDETONE_IIR0_IIR_GAIN_B3_CTL, -84, 40,
 		digital_gain),
-	SOC_SINGLE_SX_TLV("IIR0 INP3 Volume",
-		WCD934X_CDC_SIDETONE_IIR0_IIR_GAIN_B4_CTL, 0, -84, 40,
+	SOC_SINGLE_S8_TLV("IIR0 INP3 Volume",
+		WCD934X_CDC_SIDETONE_IIR0_IIR_GAIN_B4_CTL, -84, 40,
 		digital_gain),
-	SOC_SINGLE_SX_TLV("IIR1 INP0 Volume",
-		WCD934X_CDC_SIDETONE_IIR1_IIR_GAIN_B1_CTL, 0, -84, 40,
+	SOC_SINGLE_S8_TLV("IIR1 INP0 Volume",
+		WCD934X_CDC_SIDETONE_IIR1_IIR_GAIN_B1_CTL, -84, 40,
 		digital_gain),
-	SOC_SINGLE_SX_TLV("IIR1 INP1 Volume",
-		WCD934X_CDC_SIDETONE_IIR1_IIR_GAIN_B2_CTL, 0, -84, 40,
+	SOC_SINGLE_S8_TLV("IIR1 INP1 Volume",
+		WCD934X_CDC_SIDETONE_IIR1_IIR_GAIN_B2_CTL, -84, 40,
 		digital_gain),
-	SOC_SINGLE_SX_TLV("IIR1 INP2 Volume",
-		WCD934X_CDC_SIDETONE_IIR1_IIR_GAIN_B3_CTL, 0, -84, 40,
+	SOC_SINGLE_S8_TLV("IIR1 INP2 Volume",
+		WCD934X_CDC_SIDETONE_IIR1_IIR_GAIN_B3_CTL, -84, 40,
 		digital_gain),
-	SOC_SINGLE_SX_TLV("IIR1 INP3 Volume",
-		WCD934X_CDC_SIDETONE_IIR1_IIR_GAIN_B4_CTL, 0, -84, 40,
+	SOC_SINGLE_S8_TLV("IIR1 INP3 Volume",
+		WCD934X_CDC_SIDETONE_IIR1_IIR_GAIN_B4_CTL, -84, 40,
 		digital_gain),
 
 	SOC_SINGLE_EXT("ANC Slot", SND_SOC_NOPM, 0, 100, 0, tavil_get_anc_slot,
@@ -6319,6 +6427,11 @@ static const struct snd_kcontrol_new tavil_snd_controls[] = {
 
 	SOC_ENUM_EXT("CLK MODE", tavil_clkmode_enum, tavil_get_clkmode,
 		     tavil_put_clkmode),
+
+#ifdef CONFIG_SND_LGE_WDSP_SSR
+	SOC_SINGLE_EXT("wdsp ssr", SND_SOC_NOPM, 0, 1, 0,
+		     wdsp_ssr_get,wdsp_ssr_put),
+#endif
 
 	SOC_ENUM("TX0 HPF cut off", cf_dec0_enum),
 	SOC_ENUM("TX1 HPF cut off", cf_dec1_enum),
@@ -8666,6 +8779,13 @@ static int tavil_set_dai_fmt(struct snd_soc_dai *dai, unsigned int fmt)
 	return 0;
 }
 
+static int tavil_set_dai_sysclk(struct snd_soc_dai *dai,
+		int clk_id, unsigned int freq, int dir)
+{
+	pr_debug("%s\n", __func__);
+	return 0;
+}
+
 static struct snd_soc_dai_ops tavil_dai_ops = {
 	.startup = tavil_startup,
 	.shutdown = tavil_shutdown,
@@ -8680,6 +8800,7 @@ static struct snd_soc_dai_ops tavil_i2s_dai_ops = {
 	.shutdown = tavil_shutdown,
 	.hw_params = tavil_hw_params,
 	.prepare = tavil_prepare,
+	.set_sysclk = tavil_set_dai_sysclk,
 	.set_fmt = tavil_set_dai_fmt,
 };
 
@@ -8742,7 +8863,7 @@ static struct snd_soc_dai_driver tavil_slim_dai[] = {
 			.rate_min = 8000,
 			.rate_max = 192000,
 			.channels_min = 1,
-			.channels_max = 8,
+			.channels_max = 4,
 		},
 		.ops = &tavil_dai_ops,
 	},
@@ -9474,7 +9595,7 @@ static const struct tavil_reg_mask_val tavil_codec_reg_i2c_defaults[] = {
 	{WCD934X_DATA_HUB_RX2_CFG, 0x03, 0x01},
 	{WCD934X_DATA_HUB_RX3_CFG, 0x03, 0x01},
 	{WCD934X_DATA_HUB_I2S_TX0_CFG, 0x01, 0x01},
-	{WCD934X_DATA_HUB_I2S_TX0_CFG, 0x04, 0x01},
+	{WCD934X_DATA_HUB_I2S_TX0_CFG, 0x04, 0x04},
 	{WCD934X_DATA_HUB_I2S_TX1_0_CFG, 0x01, 0x01},
 	{WCD934X_DATA_HUB_I2S_TX1_1_CFG, 0x05, 0x05},
 	{WCD934X_CHIP_TIER_CTRL_ALT_FUNC_EN, 0x1, 0x1},
@@ -9650,9 +9771,10 @@ static irqreturn_t tavil_slimbus_irq(int irq, void *data)
 					 */
 				}
 			}
-			WARN(!cleared,
-			     "Couldn't find slimbus %s port %d for closing\n",
-			     (tx ? "TX" : "RX"), port_id);
+			if (!cleared)
+				dev_err(tavil->dev,
+					"%s: Couldn't find slimbus %s port %d for closing\n",
+					__func__, (tx ? "TX" : "RX"), port_id);
 		}
 		wcd9xxx_interface_reg_write(tavil->wcd9xxx,
 					    WCD934X_SLIM_PGD_PORT_INT_CLR_RX_0 +
@@ -10221,6 +10343,8 @@ static int tavil_soc_codec_probe(struct snd_soc_codec *codec)
 	snd_soc_dapm_ignore_suspend(dapm, "AIF2 Capture");
 	snd_soc_dapm_ignore_suspend(dapm, "AIF3 Playback");
 	snd_soc_dapm_ignore_suspend(dapm, "AIF3 Capture");
+	snd_soc_dapm_ignore_suspend(dapm, "WDMA3_OUT");
+
 	if (tavil->intf_type == WCD9XXX_INTERFACE_TYPE_SLIMBUS) {
 		snd_soc_dapm_ignore_suspend(dapm, "AIF4 Playback");
 		snd_soc_dapm_ignore_suspend(dapm, "AIF4 MAD TX");
@@ -10985,6 +11109,23 @@ static int tavil_probe(struct platform_device *pdev)
 	}
 	schedule_work(&tavil->tavil_add_child_devices_work);
 
+#ifdef CONFIG_MACH_LGE
+    tavil->sar = devm_extcon_dev_allocate(&pdev->dev, extcon_sar_backoff);
+	if (IS_ERR(tavil->sar)) {
+		dev_err(&pdev->dev, "failed to allocate extcon device\n");
+		return -ENOMEM;
+	}
+
+	tavil->sar->name = "sar_backoff";
+	ret = devm_extcon_dev_register(&pdev->dev, tavil->sar);
+	if (ret < 0) {
+		dev_err(&pdev->dev, "extcon_dev_register() failed: %d\n",
+			ret);
+		return ret;
+	}
+	pr_info("%s register sar_backoff extcon device\n",__func__);
+#endif  /* CONFIG_MACH_LGE */
+
 	return ret;
 
 err_cdc_reg:
@@ -11011,6 +11152,10 @@ static int tavil_remove(struct platform_device *pdev)
 	tavil = platform_get_drvdata(pdev);
 	if (!tavil)
 		return -EINVAL;
+#ifdef CONFIG_MACH_LGE
+    if( tavil->sar != NULL )
+        devm_extcon_dev_unregister(&pdev->dev, tavil->sar);
+#endif /* CONFIG_MACH_LGE */
 
 	/* do dsd deinit before codec->component->regmap becomes freed */
 	if (tavil->dsd_config) {
@@ -11047,6 +11192,7 @@ static struct platform_driver tavil_codec_driver = {
 #ifdef CONFIG_PM
 		.pm = &tavil_pm_ops,
 #endif
+		.suppress_bind_attrs = true,
 	},
 };
 
