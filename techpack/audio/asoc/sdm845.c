@@ -6514,6 +6514,7 @@ static struct snd_soc_dai_link msm_common_be_dai_links[] = {
 		.be_hw_params_fixup = msm_be_hw_params_fixup,
 		.ignore_suspend = 1,
 	},
+#ifndef CONFIG_MACH_SDM845_JUDY // Fix booting LAF due to dtbo mismatch
 	/* Proxy Tx BACK END DAI Link */
 	{
 		.name = LPASS_BE_PROXY_TX,
@@ -6541,6 +6542,7 @@ static struct snd_soc_dai_link msm_common_be_dai_links[] = {
 		.ignore_pmdown_time = 1,
 		.ignore_suspend = 1,
 	},
+#endif // CONFIG_MACH_SDM845_JUDY
 	{
 		.name = LPASS_BE_USB_AUDIO_RX,
 		.stream_name = "USB Audio Playback",
@@ -8269,10 +8271,12 @@ static int msm_asoc_machine_probe(struct platform_device *pdev)
 		goto err;
 	}
 
+#if 0
 #if IS_ENABLED(CONFIG_SND_SOC_WSA881X)
 	ret = msm_init_wsa_dev(pdev, card);
 	if (ret)
 		goto err;
+#endif
 #endif
 
 #ifdef CONFIG_MACH_LGE
