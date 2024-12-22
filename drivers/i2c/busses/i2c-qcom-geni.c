@@ -269,7 +269,7 @@ static irqreturn_t geni_i2c_irq(int irq, void *dev)
 		if (!dma)
 			writel_relaxed(0, (gi2c->base +
 					   SE_GENI_TX_WATERMARK_REG));
-		gi2c->cmd_done = true;			   
+	    gi2c->cmd_done = true;
 		goto irqret;
 	}
 
@@ -331,19 +331,14 @@ irqret:
 				       SE_DMA_RX_IRQ_CLR);
 		/* Ensure all writes are done before returning from ISR. */
 		wmb();
+		if ((dm_tx_st & TX_DMA_DONE) || (dm_rx_st & RX_DMA_DONE))
+		     gi2c->cmd_done = true;
+		     
 	}
 
-	/* For some reason if DMA could not complete transfer, GENI must have
-	 * command executed. E.g. I2C NACK, hence consider CMD_DONE too.
-	 */
-	if ((m_stat & M_CMD_DONE_EN) ||
-		 (dm_tx_st & TX_DMA_DONE) || (dm_rx_st & RX_DMA_DONE))
-		gi2c->cmd_done = true;
-		
-	}	
-	
-	else if (m_stat & M_CMD_DONE_EN)
-		gi2c->cmd_done = true;
+    else if (m_stat & M_CMD_DONE_EN)
+        gi2c->cmd_done = true;
+        
 	if (gi2c->cmd_done) {
 		gi2c->cmd_done = false;
 		complete(&gi2c->xfer);
@@ -751,7 +746,8 @@ static int geni_i2c_xfer(struct i2c_adapter *adap,
 						gi2c->xfer_timeout);
 		if (!timeout) 
 			geni_i2c_err(gi2c, GENI_TIMEOUT);
-			if (gi2c->err) {
+			
+		if (gi2c->err) {
 			reinit_completion(&gi2c->xfer);
 			gi2c->cur = NULL;
 			geni_cancel_m_cmd(gi2c->base);
