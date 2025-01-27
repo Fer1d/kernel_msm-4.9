@@ -23,9 +23,7 @@ lib-y := ctype.o string.o vsprintf.o cmdline.o \
 	 flex_proportions.o ratelimit.o show_mem.o \
 	 is_single_threaded.o plist.o decompress.o kobject_uevent.o \
 	 earlycpio.o seq_buf.o siphash.o \
-	 nodemask.o win_minmax.o
-
-lib-$(CONFIG_WATCHDOG) += nmi_backgrace.o
+	 nmi_backtrace.o nodemask.o win_minmax.o
 
 lib-$(CONFIG_MMU) += ioremap.o
 lib-$(CONFIG_SMP) += cpumask.o
@@ -113,8 +111,6 @@ obj-$(CONFIG_LZO_DECOMPRESS) += lzo/
 obj-$(CONFIG_LZ4_COMPRESS) += lz4/
 obj-$(CONFIG_LZ4HC_COMPRESS) += lz4/
 obj-$(CONFIG_LZ4_DECOMPRESS) += lz4/
-obj-$(CONFIG_LZ4KD_COMPRESS) += lz4kd/
-obj-$(CONFIG_LZ4KD_DECOMPRESS) += lz4kd/
 obj-$(CONFIG_ZSTD_COMPRESS) += zstd/
 obj-$(CONFIG_ZSTD_DECOMPRESS) += zstd/
 obj-$(CONFIG_XZ_DEC) += xz/
@@ -244,3 +240,5 @@ CFLAGS_ubsan.o := $(call cc-option, -fno-stack-protector) $(DISABLE_STACKLEAK_PL
 
 obj-$(CONFIG_SBITMAP) += sbitmap.o
 obj-$(CONFIG_QMI_ENCDEC) += qmi_encdec.o
+
+obj-y += crypto/
